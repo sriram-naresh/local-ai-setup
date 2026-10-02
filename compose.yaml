@@ -1,0 +1,20 @@
+name: local-rag
+
+services:
+  app:
+    image: local-rag:${APP_VERSION:-1.1.0}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      CHAT_DB_PATH: ${CHAT_DB_PATH:-/app/chroma_db/chat_history.db}
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - model-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  model-cache:

@@ -1,6 +1,11 @@
 import os
 import time
 import logging
+import json
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -23,6 +28,12 @@ LLM_MODEL = "llama3.2"
 RETRIEVAL_TOP_K = 15
 FINAL_TOP_K = 5
 MAX_HISTORY = 5
+CHAT_DB_PATH = Path(
+    os.getenv(
+        "CHAT_DB_PATH",
+        str(Path(CHROMA_PATH).resolve() / "chat_history.db"),
+    )
+)
 
 # Docker:
 #   http://host.docker.internal:11434
@@ -205,9 +216,95 @@ except Exception as e:
 # SESSION STATE
 # ============================================================
 
+def get_chat_connection():
+    connection = sqlite3.connect(CHAT_DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+@contextmanager
+def chat_connection():
+    connection = get_chat_connection()
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def initialize_chat_store():
+    with chat_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                messages_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+
+def list_saved_chats():
+    with chat_connection() as connection:
+        return connection.execute(
+            "SELECT id, title, updated_at FROM conversations "
+            "ORDER BY updated_at DESC"
+        ).fetchall()
+
+
+def load_saved_chat(chat_id):
+    with chat_connection() as connection:
+        row = connection.execute(
+            "SELECT messages_json FROM conversations WHERE id = ?",
+            (chat_id,),
+        ).fetchone()
+
+    if row is None:
+        return []
+
+    return [tuple(message) for message in json.loads(row["messages_json"])]
+
+
+def save_chat(chat_id, messages):
+    if not messages:
+        return
+
+    now = datetime.now().isoformat(timespec="microseconds")
+    title = messages[0][0].strip().replace("\n", " ")[:72] or "New chat"
+    serialized_messages = json.dumps(messages, ensure_ascii=False)
+
+    with chat_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO conversations (id, title, messages_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                messages_json = excluded.messages_json,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, title, serialized_messages, now, now),
+        )
+
+
+initialize_chat_store()
+
 if "conversation_history" not in st.session_state:
 
     st.session_state.conversation_history = []
+
+if "current_chat_id" not in st.session_state:
+    saved_chats = list_saved_chats()
+    if saved_chats:
+        st.session_state.current_chat_id = saved_chats[0]["id"]
+        st.session_state.conversation_history = load_saved_chat(
+            st.session_state.current_chat_id
+        )
+    else:
+        st.session_state.current_chat_id = None
 
 
 # ============================================================
@@ -654,9 +751,33 @@ with st.sidebar:
             "Conversation cleared by user"
         )
 
+        st.session_state.current_chat_id = None
         st.session_state.conversation_history = []
 
         st.rerun()
+
+    st.subheader("Previous Chats")
+
+    saved_chats = list_saved_chats()
+    if not saved_chats:
+        st.caption("Your saved chats will appear here.")
+    else:
+        for saved_chat in saved_chats:
+            chat_id = saved_chat["id"]
+            title = saved_chat["title"]
+            if st.button(
+                title,
+                key=f"open_chat_{chat_id}",
+                use_container_width=True,
+                type=(
+                    "primary"
+                    if chat_id == st.session_state.current_chat_id
+                    else "secondary"
+                ),
+            ):
+                st.session_state.current_chat_id = chat_id
+                st.session_state.conversation_history = load_saved_chat(chat_id)
+                st.rerun()
 
     st.divider()
 
@@ -852,16 +973,13 @@ if question:
         )
     )
 
-    # Keep only the latest MAX_HISTORY turns
-    if len(
-        st.session_state.conversation_history
-    ) > MAX_HISTORY:
+    if st.session_state.current_chat_id is None:
+        st.session_state.current_chat_id = str(uuid.uuid4())
 
-        st.session_state.conversation_history = (
-            st.session_state.conversation_history[
-                -MAX_HISTORY:
-            ]
-        )
+    save_chat(
+        st.session_state.current_chat_id,
+        st.session_state.conversation_history,
+    )
 
     # --------------------------------------------------------
     # LOG REQUEST SUMMARY

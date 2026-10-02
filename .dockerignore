@@ -14,7 +14,9 @@ env/
 .gitignore
 
 # Chroma
-chroma_db/
+chroma_db*/
+chat_data/
+.test-*/
 
 # Logs
 *.log
