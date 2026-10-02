@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Git
+.git/
+.gitignore
+
+# Chroma
+chroma_db/
+
+# Logs
+*.log
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# Local data
+test-data/
